@@ -1,0 +1,276 @@
+//BIBLIOTECAS UTILIZADAS
+#include <AccelStepper.h> // MOTOR DE PASSO
+#include <WiFi.h> 
+#include <WebServer.h>
+#include <FS.h>
+#include <SPIFFS.h>
+#include <time.h>
+#include <ArduinoJson.h>
+
+// Pin Definitions
+#define motorPin1  26
+#define motorPin2  25
+#define motorPin3  33
+#define motorPin4  32
+
+// Motor Configuration
+int stepsPerRevolution = 64;
+float degreePerRevolution = 5.625;
+
+AccelStepper stepper(AccelStepper::HALF4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
+
+// WiFi Credentials
+const char* ssid = "ROLEMBERG 2";
+const char* password = "sophia01";
+
+// Create WebServer object on port 80
+WebServer server(80);
+
+// Número de rotações e ângulo de rotação
+int numRotations = 3;
+float rotationAngle = 120.0;
+unsigned long lastFeedTime = 0;
+const unsigned long feedInterval = 3600000; // Intervalo de 6 horas em milissegundos
+
+// Protótipo da função degToSteps
+float degToSteps(float deg);
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize motor
+  stepper.setMaxSpeed(1000.0);
+  stepper.setAcceleration(100.0);
+
+  // Initialize SPIFFS
+  if (!SPIFFS.begin(true)) {
+    Serial.println("SPIFFS Mount Failed");
+    return;
+  }
+
+  // Connect to Wi-Fi
+  connectToWiFi();
+
+  // Configure time
+  configTime(-3 * 3600, 0, "pool.ntp.org");  // Configura o NTP com fuso horário de Brasília
+  waitForSyncTime();  // Aguarda a sincronização do tempo NTP
+
+  // Serve the main page
+  server.on("/", HTTP_GET, []() {
+    String htmlPage = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Alimentador</title>
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      text-align: center; 
+      background-color: #ddd9ce; 
+    }
+    button { 
+      font-size: 20px; 
+      margin: 10px; 
+      padding: 15px; 
+      background-color: green; 
+      color: white; 
+      border: none; 
+      border-radius: 5px; 
+      cursor: pointer; 
+    }
+    button:hover {
+      background-color: darkgreen;
+    }
+    .log {
+      text-align: left; 
+      margin: 20px auto; 
+      width: 80%; 
+      background-color: white; 
+      padding: 10px; 
+      border: 1px solid #ccc; 
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Alimentador</h1>
+  <button id="feedButton" onclick="sendCommand('rotate')">Liberar Comida</button>
+  <h2>Status</h2>
+  <div id="status"></div>
+  <h2>Log de Alimentação</h2>
+  <div id="log" class="log"></div>
+
+  <script>
+    function sendCommand(command) {
+      fetch(`/${command}`)
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('status').innerText = data;
+          updateLog();
+        })
+        .catch(error => {
+          console.error('Error:', error);
+        });
+    }
+
+    function updateLog() {
+      fetch(`/log`)
+        .then(response => response.text())
+        .then(data => {
+          document.getElementById('log').innerText = data;
+        })
+        .catch(error => {
+          console.error('Error:', error);
+        });
+    }
+
+    // Inicializa o log ao carregar a página
+    document.addEventListener('DOMContentLoaded', updateLog);
+  </script>
+  <button id="clearLogButton" onclick="sendCommand('clearLog')">Limpar Log</button>
+</body>
+</html>
+)rawliteral";
+    server.send(200, "text/html", htmlPage);
+  });
+
+  // Handle motor control
+  server.on("/rotate", HTTP_GET, []() {
+    rotateMotor();
+  });
+
+  // Handle log clearing
+  server.on("/clearLog", HTTP_GET, []() {
+    clearLog();
+  });
+
+  // Serve the log file
+  server.on("/log", HTTP_GET, []() {
+    File file = SPIFFS.open("/feed_log.txt", "r");
+    if (!file) {
+      server.send(500, "text/plain", "Failed to open log file");
+      return;
+    }
+    String logContent = file.readString();
+    file.close();
+    server.send(200, "text/plain", logContent);
+  });
+
+  // Start server
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+
+  // Verifica se o intervalo de alimentação foi atingido
+  if (millis() - lastFeedTime >= feedInterval) {
+    rotateMotor();
+    lastFeedTime = millis();  // Reinicia o temporizador de alimentação
+  }
+}
+
+void connectToWiFi() {
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(ssid, password);
+  int attempt = 0;
+  while (WiFi.status() != WL_CONNECTED && attempt < 5) {
+    delay(2000);  // Aumentar o delay para 2 segundos entre as tentativas
+    Serial.print(".");
+    attempt++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi connected");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("WiFi connection failed. Check credentials or network.");
+  }
+}
+
+void waitForSyncTime() {
+  Serial.print("Waiting for NTP time sync: ");
+  while (!time(nullptr)) {
+    Serial.print(".");
+    delay(1000);
+  }
+  Serial.println("");
+  Serial.println("Time synced with NTP");
+}
+
+void rotateMotor() {
+  for (int i = 0; i < numRotations; i++) {
+    stepper.moveTo(stepper.currentPosition() + degToSteps(rotationAngle));
+    logFeed();
+    while (stepper.distanceToGo() != 0) {
+      stepper.run();
+    }
+      // Registra a alimentação no log
+    delay(feedInterval);  // Atraso de 2 segundos entre as rotações
+   
+  }
+}
+
+void clearLog() {
+  File file = SPIFFS.open("/feed_log.txt", "w");
+  if (!file) {
+    server.send(500, "text/plain", "Failed to open log file for clearing");
+    return;
+  }
+  file.close();
+  server.send(200, "text/plain", "Log cleared");
+}
+
+void logFeed() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+    return;
+  }
+
+  char timeStr[25];
+  strftime(timeStr, sizeof(timeStr), "%d-%m-%Y %H:%M:%S", &timeinfo);
+
+  File file = SPIFFS.open("/feed_log.txt", "a+");
+  if (!file) {
+    Serial.println("Failed to open log file for writing");
+    return;
+  }
+
+  // Conta o número de linhas no arquivo
+  int lineCount = 0;
+  while (file.available()) {
+    if (file.readStringUntil('\n').length() > 0) {
+      lineCount++;
+    }
+  }
+
+  // Se o número de linhas exceder 20, apaga as linhas excedentes
+  if (lineCount >= 20) {
+    file.seek(0);  // Retorna ao início do arquivo
+    int linesToDelete = lineCount - 19;  // Deixa 19 linhas, exclui as mais antigas
+    for (int i = 0; i < linesToDelete; i++) {
+      file.readStringUntil('\n');
+    }
+    file.close();
+    file = SPIFFS.open("/feed_log.txt", "w");  // Abre o arquivo para escrita (sobrescreve tudo)
+    file.close();
+    file = SPIFFS.open("/feed_log.txt", "a+");  // Abre o arquivo novamente para append
+    if (!file) {
+      Serial.println("Failed to reopen log file for writing");
+      return;
+    }
+  }
+
+  // Registra a nova entrada no log
+  String logEntry = String(timeStr) + " - Comida liberada!\n";
+  file.print(logEntry);
+  file.close();
+}
+
+// Função para converter graus em passos
+float degToSteps(float deg) {
+  float steps = deg * (stepsPerRevolution / degreePerRevolution);
+  return steps;
+}
