@@ -1,29 +1,29 @@
 //BIBLIOTECAS UTILIZADAS
-#include <AccelStepper.h> // MOTOR DE PASSO
-#include <WiFi.h> 
-#include <WebServer.h>
-#include <FS.h>
-#include <SPIFFS.h>
-#include <time.h>
-#include <ArduinoJson.h>
+#include <AccelStepper.h> // BIBLIOTECA PARA CONTROLAR O MOTOR DE PASSO
+#include <WiFi.h> // BIBLIOTECA PARA CONEXÃO WIFI
+#include <WebServer.h> // BIBLIOTECA PARA CRIAR UM SERVIDOR WEB
+#include <FS.h> // SISTEMA DE ARQUIVOS
+#include <SPIFFS.h> // SISTEMA DE ARQUIVOS EM FLASH
+#include <time.h> // BIBLIOTECA PARA MANIPULAÇÃO DE TEMPO
+#include <ArduinoJson.h> // BIBLIOTECA PARA MANIPULAÇÃO DE JSON
 
-// Pin Definitions
+// Definições de pinos
 #define motorPin1  26
 #define motorPin2  25
 #define motorPin3  33
 #define motorPin4  32
 
-// Motor Configuration
+// Configuração do motor
 int stepsPerRevolution = 64;
 float degreePerRevolution = 5.625;
 
-AccelStepper stepper(AccelStepper::HALF4WIRE, motorPin1, motorPin3, motorPin2, motorPin4);
+AccelStepper stepper(AccelStepper::HALF4WIRE, motorPin1, motorPin3, motorPin2, motorPin4); // Configuração do motor de passo
 
-// WiFi Credentials
+// Credenciais do Wi-Fi
 const char* ssid = "ROLEMBERG 2";
-const char* password = "sophia01";
+const char* password = "********";
 
-// Create WebServer object on port 80
+// Cria um objeto servidor na porta 80
 WebServer server(80);
 
 // Número de rotações e ângulo de rotação
@@ -38,24 +38,24 @@ float degToSteps(float deg);
 void setup() {
   Serial.begin(115200);
 
-  // Initialize motor
+  // Inicializa o motor
   stepper.setMaxSpeed(1000.0);
   stepper.setAcceleration(100.0);
 
-  // Initialize SPIFFS
+  // Inicializa o SPIFFS
   if (!SPIFFS.begin(true)) {
     Serial.println("SPIFFS Mount Failed");
     return;
   }
 
-  // Connect to Wi-Fi
+  // Conecta ao Wi-Fi
   connectToWiFi();
 
-  // Configure time
+  // Configura o tempo
   configTime(-3 * 3600, 0, "pool.ntp.org");  // Configura o NTP com fuso horário de Brasília
   waitForSyncTime();  // Aguarda a sincronização do tempo NTP
 
-  // Serve the main page
+  // Serve a página principal
   server.on("/", HTTP_GET, []() {
     String htmlPage = R"rawliteral(
 <!DOCTYPE html>
@@ -135,17 +135,17 @@ void setup() {
     server.send(200, "text/html", htmlPage);
   });
 
-  // Handle motor control
+  // Manipula o controle do motor
   server.on("/rotate", HTTP_GET, []() {
     rotateMotor();
   });
 
-  // Handle log clearing
+  // Manipula a limpeza do log
   server.on("/clearLog", HTTP_GET, []() {
     clearLog();
   });
 
-  // Serve the log file
+  // Serve o arquivo de log
   server.on("/log", HTTP_GET, []() {
     File file = SPIFFS.open("/feed_log.txt", "r");
     if (!file) {
@@ -157,7 +157,7 @@ void setup() {
     server.send(200, "text/plain", logContent);
   });
 
-  // Start server
+  // Inicia o servidor
   server.begin();
 }
 
@@ -206,9 +206,8 @@ void rotateMotor() {
     while (stepper.distanceToGo() != 0) {
       stepper.run();
     }
-      // Registra a alimentação no log
+    // Registra a alimentação no log
     delay(feedInterval);  // Atraso de 2 segundos entre as rotações
-   
   }
 }
 
